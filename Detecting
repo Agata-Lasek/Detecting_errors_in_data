@@ -1,0 +1,238 @@
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import StandardScaler, OneHotEncoder
+from sklearn.compose import ColumnTransformer
+from sklearn.pipeline import Pipeline
+from sklearn.impute import SimpleImputer
+from sklearn.feature_selection import SelectKBest, mutual_info_classif
+from keras import layers, models
+from datetime import datetime
+
+# Custom function to handle invalid date formats
+def parse_date(date_str):
+    if isinstance(date_str, float) and np.isnan(date_str):
+        return np.nan
+    try:
+        return (datetime.strptime(date_str, "%Y-%m-%d") - datetime(1970, 1, 1)).days
+    except (ValueError, TypeError):
+        return np.nan
+
+# Function to detect mistakes in each row
+def detect_mistakes(row):
+    mistakes = ''
+    if pd.isnull(row['Title']) or row['Title'].strip() == '':
+        mistakes += '1'
+    if pd.isnull(row['Director']) or not isinstance(row['Director'], str) or row['Director'] == 'Unknown Director' or row['Director'].strip() == '':
+        mistakes += '2'
+    if 'Time' in row and (pd.isnull(row['Time']) or not isinstance(row['Time'], (int, float)) or row['Time'] < 90 or row['Time'] > 230):
+        mistakes += '3'
+    if pd.isnull(row['ReleaseDate']) or row['ReleaseDate'] == 'Invalid Date' or not isinstance(row['ReleaseDate'], (int, float)):
+        mistakes += '4'
+    if pd.isnull(row['Genre']) or not isinstance(row['Genre'], str) or row['Genre'] == 'Unknown Genre' or row['Genre'].strip() == '':
+        mistakes += '5'
+    if pd.isnull(row['Rating']) or not isinstance(row['Rating'], (int, float)):
+        mistakes += '6'
+    return mistakes if mistakes else '0'
+
+# Load data from text files
+train_data = pd.read_csv('C:/Users/agata/Desktop/train_data_with_oscars_modifications.txt', delimiter=',')
+validation_data = pd.read_csv('C:/Users/agata/Desktop/validation_data_with_oscars_modifications.txt', delimiter=',')
+test_data = pd.read_csv('C:/Users/agata/Desktop/test_data_with_oscars_modifications.txt', delimiter=',')
+
+# Apply date parsing to the ReleaseDate column
+train_data['ReleaseDate'] = train_data['ReleaseDate'].apply(parse_date)
+validation_data['ReleaseDate'] = validation_data['ReleaseDate'].apply(parse_date)
+test_data['ReleaseDate'] = test_data['ReleaseDate'].apply(parse_date)
+
+# Identify categorical and numerical columns
+categorical_cols = ['Title', 'Director', 'Genre']
+numerical_cols = ['ReleaseDate', 'Rating']
+
+# Preprocessing pipelines for numerical and categorical data
+numerical_pipeline = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='mean')),
+    ('scaler', StandardScaler())
+])
+
+categorical_pipeline = Pipeline(steps=[
+    ('imputer', SimpleImputer(strategy='constant', fill_value='missing')),
+    ('onehot', OneHotEncoder(handle_unknown='ignore'))
+])
+
+# Combine preprocessing steps
+preprocessor = ColumnTransformer(
+    transformers=[
+        ('num', numerical_pipeline, numerical_cols),
+        ('cat', categorical_pipeline, categorical_cols)
+    ])
+
+# Separate features and target variables for Won prediction
+X_train_won = train_data.drop(['Won'], axis=1)
+y_train_won = train_data['Won']
+X_val_won = validation_data.drop(['Won'], axis=1)
+y_val_won = validation_data['Won']
+X_test_won = test_data.copy()
+
+# Fit and transform the training data for Won prediction
+X_train_won_processed = preprocessor.fit_transform(X_train_won)
+X_val_won_processed = preprocessor.transform(X_val_won)
+X_test_won_processed = preprocessor.transform(X_test_won)
+
+# Feature selection for Won prediction
+selector_won = SelectKBest(mutual_info_classif, k=10)
+X_train_won_selected = selector_won.fit_transform(X_train_won_processed, y_train_won)
+X_val_won_selected = selector_won.transform(X_val_won_processed)
+X_test_won_selected = selector_won.transform(X_test_won_processed)
+
+# Convert sparse matrices to dense
+X_train_won_selected = X_train_won_selected.todense()
+X_val_won_selected = X_val_won_selected.todense()
+X_test_won_selected = X_test_won_selected.todense()
+
+# Define the model for predicting Won
+model_won = models.Sequential([
+    layers.Dense(256, activation='relu', input_shape=[X_train_won_selected.shape[1]]),
+    layers.Dense(128, activation='relu'),
+    layers.Dense(64, activation='relu'),
+    layers.Dense(32, activation='relu'),
+    layers.Dense(1, activation='sigmoid')
+])
+
+# Compile the model
+model_won.compile(optimizer='adam',
+                  loss='binary_crossentropy',
+                  metrics=['accuracy'])
+
+# Train the model for Won prediction
+history_won = model_won.fit(
+    X_train_won_selected, y_train_won,
+    epochs=50,
+    validation_data=(X_val_won_selected, y_val_won)
+)
+
+# Evaluate the model for Won prediction
+val_loss_won, val_accuracy_won = model_won.evaluate(X_val_won_selected, y_val_won)
+print(f'Validation Loss: {val_loss_won}, Validation Accuracy: {val_accuracy_won}')
+
+# Predict on test data for Won
+test_predictions_won = model_won.predict(X_test_won_selected)
+test_predictions_won = (test_predictions_won > 0.5).astype(int)
+
+# Add predicted Won to the test data
+test_data['Predicted_Won'] = test_predictions_won
+
+# Add Mistakes column based on detected mistakes
+train_data['Mistakes'] = train_data.apply(detect_mistakes, axis=1)
+validation_data['Mistakes'] = validation_data.apply(detect_mistakes, axis=1)
+test_data['Mistakes'] = test_data.apply(detect_mistakes, axis=1)
+
+# Check if rows are correct
+def check_is_correct(row):
+    return 0 if row['Mistakes'] != '0' else 1
+
+train_data['IsCorrect'] = train_data.apply(check_is_correct, axis=1)
+validation_data['IsCorrect'] = validation_data.apply(check_is_correct, axis=1)
+test_data['IsCorrect'] = test_data.apply(check_is_correct, axis=1)
+
+# Separate features and target variables for IsCorrect
+X_train_correct = train_data.drop(['IsCorrect', 'Mistakes', 'Won'], axis=1)
+y_train_correct = train_data['IsCorrect']
+X_val_correct = validation_data.drop(['IsCorrect', 'Mistakes', 'Won'], axis=1)
+y_val_correct = validation_data['IsCorrect']
+X_test_correct = test_data.drop(['IsCorrect', 'Mistakes', 'Won'], axis=1)
+
+# Fit and transform the training data for IsCorrect prediction
+X_train_correct_processed = preprocessor.fit_transform(X_train_correct)
+X_val_correct_processed = preprocessor.transform(X_val_correct)
+X_test_correct_processed = preprocessor.transform(X_test_correct)
+
+# Feature selection for IsCorrect prediction
+selector_correct = SelectKBest(mutual_info_classif, k=10)
+X_train_correct_selected = selector_correct.fit_transform(X_train_correct_processed, y_train_correct)
+X_val_correct_selected = selector_correct.transform(X_val_correct_processed)
+X_test_correct_selected = selector_correct.transform(X_test_correct_processed)
+
+# Convert sparse matrices to dense
+X_train_correct_selected = X_train_correct_selected.todense()
+X_val_correct_selected = X_val_correct_selected.todense()
+X_test_correct_selected = X_test_correct_selected.todense()
+
+# Define the neural network model for IsCorrect
+model_correct = models.Sequential([
+    layers.Dense(256, activation='relu', input_shape=[X_train_correct_selected.shape[1]]),
+    layers.Dense(128, activation='relu'),
+    layers.Dense(64, activation='relu'),
+    layers.Dense(32, activation='relu'),
+    layers.Dense(1, activation='sigmoid')
+])
+
+# Compile the model
+model_correct.compile(optimizer='adam',
+                      loss='binary_crossentropy',
+                      metrics=['accuracy'])
+
+# Train the model
+history_correct = model_correct.fit(
+    X_train_correct_selected, y_train_correct,
+    epochs=50,
+    validation_data=(X_val_correct_selected, y_val_correct)
+)
+
+# Evaluate the model
+val_loss_correct, val_accuracy_correct = model_correct.evaluate(X_val_correct_selected, y_val_correct)
+print(f'Validation Loss: {val_loss_correct}, Validation Accuracy: {val_accuracy_correct}')
+
+# Predict on test data for IsCorrect
+test_predictions_correct = model_correct.predict(X_test_correct_selected)
+test_predictions_correct = (test_predictions_correct > 0.5).astype(int)
+
+# Update IsCorrect column based on predictions
+test_data['IsCorrect'] = test_predictions_correct
+
+# Update Mistakes column based on predictions for IsCorrect
+test_data['Mistakes'] = test_data.apply(detect_mistakes, axis=1)
+
+# Compare Predicted_Won and Won columns
+def update_mistakes(row):
+    if row['Predicted_Won'] != row['Won']:
+        if row['Mistakes'] == '0':
+            return '7'
+        if '7' not in row['Mistakes']:
+            return row['Mistakes'] + '7'
+    return row['Mistakes']
+
+test_data['Mistakes'] = test_data.apply(update_mistakes, axis=1)
+
+# Update IsCorrect column to 0 if currently 1
+def update_is_correct(row):
+    if row['IsCorrect'] == 1:
+        return 0
+    return row['IsCorrect']
+
+test_data['IsCorrect'] = test_data.apply(update_is_correct, axis=1)
+
+# Convert ReleaseDate back to string format yyyy-mm-dd
+test_data['ReleaseDate'] = pd.to_datetime(test_data['ReleaseDate'], origin='1970-01-01', unit='D').dt.strftime('%Y-%m-%d')
+
+# Check for duplicates in the 'Title' column and remove them
+duplicates_count = test_data.duplicated().sum()
+test_data = test_data.drop_duplicates()
+
+# Print the number of removed duplicates
+print(f'Number of removed duplicates: {duplicates_count}')
+
+# Save the final test data to a file
+test_data.to_csv('C:/Users/agata/Desktop/test_data_with_updated_mistakes.txt', sep=',', index=False)
+
+
+# Calculate number of digits in Mistakes column
+test_data['Mistakes_digit_count'] = test_data['Mistakes'].apply(lambda x: sum(c.isdigit() for c in x))
+
+# Sort test_data by Mistakes_digit_count column in descending order
+test_data_sorted = test_data.sort_values(by='Mistakes_digit_count', ascending=False)
+
+# Remove Mistakes_digit_count column
+test_data_sorted = test_data_sorted.drop('Mistakes_digit_count', axis=1)
+
+# Save the sorted test data to a new file
+test_data_sorted.to_csv('C:/Users/agata/Desktop/test_data_sorted_by_mistakes.txt', sep=',', index=False)
