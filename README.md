@@ -1,0 +1,1 @@
+Celem tego projektu było przetworzenie, analiza i modelowanie danych filmowych. Należało zaprezentować sposoby wykrywania błędów w danych oraz na podstawie wyselekcjonowanych cech przeprowadzić uczenie sieci neuronowej.
