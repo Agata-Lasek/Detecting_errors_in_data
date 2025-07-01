@@ -54,8 +54,13 @@ Funkcja `detect_mistakes()` przypisuje błędy:
 Użyto dwóch modeli opartych na sieciach neuronowych (Keras):
 
 ### Predykcja `Won`
+
+- Preprocessing: imputacja, skalowanie, one-hot encoding
+- Selekcja cech: `SelectKBest(mutual_info_classif, k=10)`
+  
 ### Predykcja `IsCorrect`
 
+Analogicznie
 
 ## Ewaluacja
 
